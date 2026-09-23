@@ -205,11 +205,7 @@ class TitanBot extends Client {
     });
 
     app.get('/', (req, res) => {
-      res.status(200).json({ 
-        message: 'TitanBot System Online',
-        version: pkg.version,
-        timestamp: new Date().toISOString()
-      });
+      res.redirect('/dashboard/');
     });
 
     const startServer = (port, attempt = 0) => {
