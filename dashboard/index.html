@@ -20,7 +20,7 @@ button{cursor:pointer;background:var(--blue);border-color:var(--blue);font-weigh
 .bar{height:7px;background:#1e293b;border-radius:99px;overflow:hidden;margin-top:8px}.bar i{display:block;height:100%;background:#3b82f6;border-radius:99px;transition:width .4s}
 .chart{height:92px;display:flex;align-items:end;gap:3px;margin-top:14px}.chart i{flex:1;min-width:2px;background:#3b82f6;border-radius:3px 3px 0 0;opacity:.75}
 .config{display:grid;grid-template-columns:1fr 1fr;gap:10px}.config .metric{border:1px solid var(--border);border-radius:10px;padding:12px;display:block}.config .metric b{display:block;margin-top:4px}
-.toast{position:fixed;right:22px;bottom:22px;max-width:360px;background:#0f172a;border:1px solid var(--border);padding:14px 16px;border-radius:12px;box-shadow:0 10px 30px #0007}
+.geo{display:grid;grid-template-columns:1fr auto;gap:10px}.geo input{margin:0}.geo button{width:auto;margin:0}.geo-result{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px}.geo-result .metric{background:#0f172acc;border:1px solid var(--border);border-radius:10px;padding:10px}.geo-result .metric b{display:block;margin-top:3px}.map-link{display:inline-block;margin-top:12px;color:#93c5fd;text-decoration:none}.toast{position:fixed;right:22px;bottom:22px;max-width:360px;background:#0f172a;border:1px solid var(--border);padding:14px 16px;border-radius:12px;box-shadow:0 10px 30px #0007}
 @media(max-width:950px){.grid{grid-template-columns:repeat(2,1fr)}.layout,.two{grid-template-columns:1fr}.actions{grid-template-columns:repeat(2,1fr)}}@media(max-width:520px){.wrap{padding:16px}.grid{grid-template-columns:1fr}.actions,.config{grid-template-columns:1fr}}
 </style>
 </head>
@@ -109,6 +109,21 @@ button{cursor:pointer;background:var(--blue);border-color:var(--blue);font-weigh
     </section>
   </div>
 
+  <div class="two">
+    <section class="card">
+      <h2>IP Geolocator</h2>
+      <div class="geo">
+        <input id="geoIp" placeholder="Enter IPv4 / IPv6 (blank = server IP)">
+        <button id="geoLookup">Locate IP</button>
+      </div>
+      <div id="geoResult" class="meta" style="margin-top:12px">Enter an IP to see approximate network location and ISP information.</div>
+    </section>
+    <section class="card">
+      <h2>Health</h2>
+      <div id="health"></div>
+    </section>
+  </div>
+
   <section class="card" style="margin-top:18px">
     <h2>Servers</h2><div id="servers" class="servers"></div>
   </section>
@@ -143,15 +158,51 @@ async function load(){
     $('prefix').textContent=d.bot.prefix;$('logLevel').textContent=d.bot.logLevel;$('env').textContent=d.process?.nodeVersion?'Node '+d.process.nodeVersion:'—';
     $('status').innerHTML='<p><span class="pill">'+esc(d.bot.status)+'</span> <b>'+esc(d.bot.username)+'</b></p><p class="meta">Database: '+esc(d.database.connectionType||'unknown')+(d.database.isDegraded?' (degraded)':'')+'</p><p class="meta">PID: '+fmt(d.process?.pid)+'</p><p class="meta">Last update: '+new Date(d.timestamp).toLocaleTimeString()+'</p>';
     $('servers').innerHTML=d.servers.map(s=>'<div class="server">'+(s.icon?'<img src="'+esc(s.icon)+'">':'')+'<div><strong>'+esc(s.name)+'</strong><span class="meta">'+fmt(s.members)+' members · '+fmt(s.channels)+' channels · '+fmt(s.usersInVoice)+' in voice</span></div></div>').join('')||'<span class="muted">No servers connected.</span>';
-    renderChart(d.history);
+    renderChart(d.history);renderHealth(d);
   }catch(e){if(e.message==='401')showLogin()}
 }
+function renderHealth(d){
+  const checks=[
+    ['Discord', d.bot.status==='online'],
+    ['Database', !d.database.isDegraded],
+    ['Event loop', d.eventLoopLagMs < 100],
+    ['CPU', d.cpuPercent < 90],
+    ['Memory', d.memoryMb < d.totalMemoryMb * .9],
+    ['Latency', d.websocketPing == null || d.websocketPing < 500]
+  ];
+  $('health').innerHTML=checks.map(([name,ok])=>'<div class="metric"><span>'+name+'</span><b>'+ (ok?'✓ Healthy':'! Attention') +'</b></div>').join('');
+}
+
+async function geolocate(){
+  const ip=$('geoIp').value.trim();
+  $('geoResult').textContent='Looking up…';
+  try{
+    const d=await api('/api/dashboard/geolocate'+(ip?'?ip='+encodeURIComponent(ip):''));
+    $('geoResult').innerHTML='<div class="geo-result">'+
+      '<div class="metric"><span>IP</span><b>'+esc(d.ip)+'</b></div>'+
+      '<div class="metric"><span>Type</span><b>'+esc(d.type||'—')+'</b></div>'+
+      '<div class="metric"><span>Country</span><b>'+esc((d.country||'—')+(d.countryCode?' ('+d.countryCode+')':''))+'</b></div>'+
+      '<div class="metric"><span>Region</span><b>'+esc(d.region||'—')+'</b></div>'+
+      '<div class="metric"><span>City</span><b>'+esc(d.city||'—')+'</b></div>'+
+      '<div class="metric"><span>Postal</span><b>'+esc(d.postal||'—')+'</b></div>'+
+      '<div class="metric"><span>ISP</span><b>'+esc(d.isp||'—')+'</b></div>'+
+      '<div class="metric"><span>Organization</span><b>'+esc(d.organization||'—')+'</b></div>'+
+      '<div class="metric"><span>ASN</span><b>'+esc(d.asn||'—')+'</b></div>'+
+      '<div class="metric"><span>Timezone</span><b>'+esc(d.timezone||'—')+'</b></div>'+
+      '<div class="metric"><span>Coordinates</span><b>'+esc(d.latitude+', '+d.longitude)+'</b></div>'+
+      '</div>'+
+      '<a class="map-link" target="_blank" rel="noopener" href="https://www.openstreetmap.org/?mlat='+encodeURIComponent(d.latitude)+'&mlon='+encodeURIComponent(d.longitude)+'#map=12/'+encodeURIComponent(d.latitude)+'/'+encodeURIComponent(d.longitude)+'">Open approximate location on OpenStreetMap →</a>';
+  }catch(e){$('geoResult').textContent='Lookup failed: '+e.message}
+}
+
 async function loadConfig(){try{const d=await api('/api/dashboard/config');$('prefix').textContent=d.prefix;$('logLevel').textContent=d.logLevel;$('env').textContent=d.nodeEnv}catch{}}
 function showLogin(){$('login').classList.remove('hidden');$('dashboard').classList.add('hidden')}
 async function init(){try{const m=await api('/api/dashboard/me');$('user').textContent=m.username;$('login').classList.add('hidden');$('dashboard').classList.remove('hidden');load();loadConfig();setInterval(load,5000)}catch{showLogin()}}
 $('loginForm').addEventListener('submit',async e=>{e.preventDefault();$('loginError').textContent='';try{const r=await api('/api/dashboard/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('username').value,password:$('password').value})});$('user').textContent=r.username;$('login').classList.add('hidden');$('dashboard').classList.remove('hidden');load();loadConfig()}catch{$('loginError').textContent='Invalid username or password.'}});
 document.querySelectorAll('[data-action]').forEach(btn=>btn.addEventListener('click',async()=>{const action=btn.dataset.action;if(!confirm(action==='stop'?'Stop the bot now?':action==='restart'?'Restart the bot now?':'Run '+btn.textContent+'?'))return;btn.disabled=true;try{const r=await api('/api/dashboard/control/'+action,{method:'POST',headers:{'Content-Type':'application/json'}});toast(r.message||'Action completed.');if(action!=='restart'&&action!=='stop')load()}catch(e){toast('Action failed: '+e.message)}finally{btn.disabled=false}}));
 $('logout').addEventListener('click',async()=>{await api('/api/dashboard/logout',{method:'POST'});showLogin()});
+$('geoLookup').addEventListener('click',geolocate);
+$('geoIp').addEventListener('keydown',e=>{if(e.key==='Enter')geolocate()});
 init();
 </script>
 </body>
