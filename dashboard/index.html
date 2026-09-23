@@ -111,6 +111,10 @@ button{cursor:pointer;background:var(--blue);border-color:var(--blue);font-weigh
 
   <div class="two">
     <section class="card">
+      <h2>Account</h2>
+      <div id="account"></div>
+    </section>
+    <section class="card">
       <h2>IP Geolocator</h2>
       <div class="geo">
         <input id="geoIp" placeholder="Enter IPv4 / IPv6 (blank = server IP)">
@@ -123,6 +127,11 @@ button{cursor:pointer;background:var(--blue);border-color:var(--blue);font-weigh
       <div id="health"></div>
     </section>
   </div>
+
+  <section class="card" style="margin-top:18px">
+    <h2>Login History</h2>
+    <div id="loginHistory" class="servers"></div>
+  </section>
 
   <section class="card" style="margin-top:18px">
     <h2>Servers</h2><div id="servers" class="servers"></div>
@@ -173,6 +182,22 @@ function renderHealth(d){
   $('health').innerHTML=checks.map(([name,ok])=>'<div class="metric"><span>'+name+'</span><b>'+ (ok?'✓ Healthy':'! Attention') +'</b></div>').join('');
 }
 
+async function loadAccount(){
+  try{
+    const d=await api('/api/dashboard/account');
+    $('account').innerHTML='<div class="metric"><span>Account</span><b>'+esc(d.username)+'</b></div>'+
+      '<div class="metric"><span>Current IP</span><b>'+esc(d.currentIp)+'</b></div>'+
+      '<div class="metric"><span>Session lifetime</span><b>'+Math.floor(d.sessionExpiresInSeconds/3600)+' hours</b></div>';
+  }catch{}
+}
+
+async function loadLoginHistory(){
+  try{
+    const d=await api('/api/dashboard/login-history');
+    $('loginHistory').innerHTML=d.entries.length?d.entries.map(x=>'<div class="server"><div><strong>'+esc(x.username)+' · '+(x.success?'Successful':'Failed')+'</strong><span class="meta">'+new Date(x.timestamp).toLocaleString()+' · IP: '+esc(x.ip)+'</span><span class="meta">'+esc(x.userAgent)+'</span></div></div>').join(''):'<span class="muted">No login attempts recorded yet.</span>';
+  }catch{}
+}
+
 async function geolocate(){
   const ip=$('geoIp').value.trim();
   $('geoResult').textContent='Looking up…';
@@ -197,8 +222,8 @@ async function geolocate(){
 
 async function loadConfig(){try{const d=await api('/api/dashboard/config');$('prefix').textContent=d.prefix;$('logLevel').textContent=d.logLevel;$('env').textContent=d.nodeEnv}catch{}}
 function showLogin(){$('login').classList.remove('hidden');$('dashboard').classList.add('hidden')}
-async function init(){try{const m=await api('/api/dashboard/me');$('user').textContent=m.username;$('login').classList.add('hidden');$('dashboard').classList.remove('hidden');load();loadConfig();setInterval(load,5000)}catch{showLogin()}}
-$('loginForm').addEventListener('submit',async e=>{e.preventDefault();$('loginError').textContent='';try{const r=await api('/api/dashboard/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('username').value,password:$('password').value})});$('user').textContent=r.username;$('login').classList.add('hidden');$('dashboard').classList.remove('hidden');load();loadConfig()}catch{$('loginError').textContent='Invalid username or password.'}});
+async function init(){try{const m=await api('/api/dashboard/me');$('user').textContent=m.username;$('login').classList.add('hidden');$('dashboard').classList.remove('hidden');load();loadConfig();loadAccount();loadLoginHistory();setInterval(load,5000);setInterval(loadLoginHistory,10000)}catch{showLogin()}}
+$('loginForm').addEventListener('submit',async e=>{e.preventDefault();$('loginError').textContent='';try{const r=await api('/api/dashboard/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('username').value,password:$('password').value})});$('user').textContent=r.username;$('login').classList.add('hidden');$('dashboard').classList.remove('hidden');load();loadConfig();loadAccount();loadLoginHistory()}catch{$('loginError').textContent='Invalid username or password.'}});
 document.querySelectorAll('[data-action]').forEach(btn=>btn.addEventListener('click',async()=>{const action=btn.dataset.action;if(!confirm(action==='stop'?'Stop the bot now?':action==='restart'?'Restart the bot now?':'Run '+btn.textContent+'?'))return;btn.disabled=true;try{const r=await api('/api/dashboard/control/'+action,{method:'POST',headers:{'Content-Type':'application/json'}});toast(r.message||'Action completed.');if(action!=='restart'&&action!=='stop')load()}catch(e){toast('Action failed: '+e.message)}finally{btn.disabled=false}}));
 $('logout').addEventListener('click',async()=>{await api('/api/dashboard/logout',{method:'POST'});showLogin()});
 $('geoLookup').addEventListener('click',geolocate);
