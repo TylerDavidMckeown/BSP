@@ -19,6 +19,8 @@ const sessions = new Map();
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const HISTORY_LIMIT = 60;
 const history = [];
+const loginHistory = [];
+const LOGIN_HISTORY_LIMIT = 100;
 const startedAt = Date.now();
 
 let lastCpu = process.cpuUsage();
@@ -212,6 +214,23 @@ async function geolocateIp(ip) {
   };
 }
 
+function getClientIp(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  const candidate = Array.isArray(forwarded) ? forwarded[0] : String(forwarded || '').split(',')[0].trim();
+  return candidate || req.socket?.remoteAddress || 'unknown';
+}
+
+function recordLogin(username, req, success) {
+  loginHistory.unshift({
+    timestamp: new Date().toISOString(),
+    username,
+    ip: getClientIp(req),
+    success,
+    userAgent: String(req.headers['user-agent'] || 'unknown').slice(0, 300),
+  });
+  if (loginHistory.length > LOGIN_HISTORY_LIMIT) loginHistory.pop();
+}
+
 function dashboardUser(req) {
   return verifySession(parseCookies(req.headers.cookie).dashboard_session);
 }
@@ -269,9 +288,11 @@ export function startDashboard(bot, app) {
     const { username, password } = req.body || {};
     const passwordProvider = USERS[username];
     if (!passwordProvider || !safeEqual(password, passwordProvider())) {
+      recordLogin(username || 'unknown', req, false);
       return res.status(401).json({ error: 'Invalid username or password' });
     }
 
+    recordLogin(username, req, true);
     const token = issueSession(username);
     sessions.set(token, { username, expires: Date.now() + SESSION_TTL_MS });
 
@@ -320,6 +341,27 @@ export function startDashboard(bot, app) {
       logger.warn('Dashboard IP geolocation failed', { message: error.message });
       res.status(400).json({ error: error.message });
     }
+  });
+
+  app.get('/api/dashboard/login-history', (req, res) => {
+    if (!requireDashboardUser(req, res)) return;
+    res.json({
+      entries: loginHistory,
+      current: {
+        username: dashboardUser(req),
+        ip: getClientIp(req),
+      },
+    });
+  });
+
+  app.get('/api/dashboard/account', (req, res) => {
+    const username = requireDashboardUser(req, res);
+    if (!username) return;
+    res.json({
+      username,
+      currentIp: getClientIp(req),
+      sessionExpiresInSeconds: Math.max(0, Math.floor(SESSION_TTL_MS / 1000)),
+    });
   });
 
   app.get('/api/dashboard/config', (req, res) => {
