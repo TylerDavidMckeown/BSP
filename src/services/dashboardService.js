@@ -3,11 +3,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import os from 'node:os';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { logger } from '../utils/logger.js';
 import { loadCommands, registerCommands } from '../handlers/loaders/commandLoader.js';
-const execFileAsync = promisify(execFile);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dashboardRoot = path.resolve(__dirname, '../../dashboard');
@@ -22,9 +19,19 @@ const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const HISTORY_LIMIT = 60;
 const history = [];
 const startedAt = Date.now();
-let lastStatsAt = 0;
+
 let lastCpu = process.cpuUsage();
 let lastCpuAt = process.hrtime.bigint();
+let eventLoopLagMs = 0;
+
+const loopProbe = () => {
+  const expected = Date.now() + 1000;
+  setTimeout(() => {
+    eventLoopLagMs = Math.max(0, Date.now() - expected);
+    loopProbe();
+  }, 1000).unref();
+};
+loopProbe();
 
 function safeEqual(a, b) {
   if (!a || !b) return false;
@@ -77,9 +84,7 @@ function getStats(bot) {
     const memberCount = guild.memberCount ?? guild.members.cache.size;
     const guildBots = guild.members.cache.filter(member => member.user?.bot).size;
     const guildChannels = guild.channels.cache.size;
-    const guildVoiceChannels = guild.channels.cache.filter(channel =>
-      channel.isVoiceBased?.()
-    ).size;
+    const guildVoiceChannels = guild.channels.cache.filter(channel => channel.isVoiceBased?.()).size;
     const guildUsersInVoice = guild.members.cache.filter(member => member.voice?.channelId).size;
 
     members += memberCount;
@@ -105,9 +110,15 @@ function getStats(bot) {
   const cpuNow = process.cpuUsage();
   const elapsedMicros = Number(nowHr - lastCpuAt) / 1000;
   const cpuMicros = (cpuNow.user - lastCpu.user) + (cpuNow.system - lastCpu.system);
-  const cpuPercent = elapsedMicros > 0 ? Math.min(100, Math.max(0, (cpuMicros / elapsedMicros) * 100)) : 0;
-  lastCpu = cpuNow; lastCpuAt = nowHr;
+  const cpuPercent = elapsedMicros > 0 ? Math.max(0, Math.min(100, (cpuMicros / elapsedMicros) * 100)) : 0;
+  lastCpu = cpuNow;
+  lastCpuAt = nowHr;
+
   const load = os.loadavg();
+  // Discord bots do not have Minecraft TPS. This is an event-loop health metric,
+  // expressed against the 20 ticks/sec reference (50ms per tick).
+  const tps = Math.max(0, Math.min(20, 20 * (1 - Math.min(eventLoopLagMs, 50) / 50)));
+
   const snapshot = {
     timestamp: new Date().toISOString(),
     guilds: guilds.length,
@@ -121,20 +132,26 @@ function getStats(bot) {
     websocketPing: bot.ws?.ping ?? null,
     memoryMb: Math.round(memory.rss / 1024 / 1024),
     heapUsedMb: Math.round(memory.heapUsed / 1024 / 1024),
+    heapTotalMb: Math.round(memory.heapTotal / 1024 / 1024),
+    externalMb: Math.round(memory.external / 1024 / 1024),
     cpuPercent: Math.round(cpuPercent * 10) / 10,
     load1m: Math.round(load[0] * 100) / 100,
+    load5m: Math.round(load[1] * 100) / 100,
+    load15m: Math.round(load[2] * 100) / 100,
     nodeVersion: process.version,
     platform: process.platform,
+    release: os.release(),
     arch: process.arch,
     hostname: os.hostname(),
     totalMemoryMb: Math.round(os.totalmem() / 1024 / 1024),
     freeMemoryMb: Math.round(os.freemem() / 1024 / 1024),
     cpus: os.cpus().length,
-    tps: null,
-    responseTimeMs: lastStatsAt ? Date.now() - lastStatsAt : null,
+    cpuModel: os.cpus()[0]?.model || 'Unknown',
+    tps: Math.round(tps * 100) / 100,
+    eventLoopLagMs: Math.round(eventLoopLagMs * 10) / 10,
+    responseTimeMs: null,
   };
 
-  lastStatsAt = Date.now();
   history.push(snapshot);
   while (history.length > HISTORY_LIMIT) history.shift();
 
@@ -152,31 +169,53 @@ function getStats(bot) {
     database: bot.db?.getStatus?.() ?? { connectionType: 'unknown', isDegraded: true },
     servers,
     history,
+    process: {
+      pid: process.pid,
+      nodeVersion: process.version,
+      startedAt: new Date(startedAt).toISOString(),
+    },
   };
 }
 
+function dashboardUser(req) {
+  return verifySession(parseCookies(req.headers.cookie).dashboard_session);
+}
 
-function dashboardUser(req) { return verifySession(parseCookies(req.headers.cookie).dashboard_session); }
-function requireDashboardUser(req, res) { const username = dashboardUser(req); if (!username) { res.status(401).json({ error: 'Authentication required' }); return null; } return username; }
+function requireDashboardUser(req, res) {
+  const username = dashboardUser(req);
+  if (!username) {
+    res.status(401).json({ error: 'Authentication required' });
+    return null;
+  }
+  return username;
+}
 
 async function control(bot, action) {
   if (action === 'restart') {
     setTimeout(() => process.exit(0), 250);
-    return { message: 'Restart requested. Railway will restart the service.' };
+    return { message: 'Restart requested. The process will exit and the host can restart it.' };
   }
+
   if (action === 'stop') {
     setTimeout(() => process.kill(process.pid, 'SIGTERM'), 250);
     return { message: 'Stop requested.' };
   }
+
   if (action === 'cache') {
-    bot.commands?.clear(); bot.cooldowns?.clear(); bot.buttons?.clear(); bot.selectMenus?.clear(); bot.modals?.clear();
+    bot.commands?.clear();
+    bot.cooldowns?.clear();
+    bot.buttons?.clear();
+    bot.selectMenus?.clear();
+    bot.modals?.clear();
     await loadCommands(bot);
-    return { message: 'In-memory bot caches cleared and commands reloaded.' };
+    return { message: 'In-memory caches cleared and commands reloaded.' };
   }
+
   if (action === 'sync') {
     await registerCommands(bot, { clientId: bot.config.bot.clientId });
     return { message: 'Slash commands synchronized globally.' };
   }
+
   throw new Error('Unknown dashboard action');
 }
 
@@ -220,8 +259,7 @@ export function startDashboard(bot, app) {
   });
 
   app.get('/api/dashboard/stats', (req, res) => {
-    const username = verifySession(parseCookies(req.headers.cookie).dashboard_session);
-    if (!username) return res.status(401).json({ error: 'Authentication required' });
+    if (!requireDashboardUser(req, res)) return;
     const started = process.hrtime.bigint();
     const stats = getStats(bot);
     stats.responseTimeMs = Number(process.hrtime.bigint() - started) / 1e6;
@@ -230,12 +268,21 @@ export function startDashboard(bot, app) {
 
   app.post('/api/dashboard/control/:action', express.json(), async (req, res) => {
     if (!requireDashboardUser(req, res)) return;
-    try { res.json(await control(bot, req.params.action)); }
-    catch (error) { logger.error('Dashboard control failed:', error); res.status(500).json({ error: error.message }); }
+    try {
+      res.json(await control(bot, req.params.action));
+    } catch (error) {
+      logger.error('Dashboard control failed:', error);
+      res.status(500).json({ error: error.message });
+    }
   });
 
   app.get('/api/dashboard/config', (req, res) => {
     if (!requireDashboardUser(req, res)) return;
-    res.json({ prefix: process.env.COMMAND_PREFIX || 'Not configured', logLevel: process.env.LOG_LEVEL || 'info' });
+    res.json({
+      prefix: process.env.COMMAND_PREFIX || 'Not configured',
+      logLevel: process.env.LOG_LEVEL || 'info',
+      nodeEnv: process.env.NODE_ENV || 'development',
+      port: process.env.PORT || bot.config?.api?.port || 3000,
+    });
   });
 }
