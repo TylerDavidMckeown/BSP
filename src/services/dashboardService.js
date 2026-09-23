@@ -2,7 +2,6 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import axios from 'axios';
 import os from 'node:os';
 import { logger } from '../utils/logger.js';
 import { loadCommands, registerCommands } from '../handlers/loaders/commandLoader.js';
@@ -180,57 +179,6 @@ function getStats(bot) {
   };
 }
 
-function isValidIp(value) {
-  if (!value || typeof value !== 'string' || value.length > 64) return false;
-  const ipv4 = /^(?:\\d{1,3}\\.){3}\\d{1,3}$/;
-  const ipv6 = /^[0-9a-f:]+$/i;
-  return ipv4.test(value) || ipv6.test(value);
-}
-
-async function geolocateIp(ip) {
-  const target = ip || (await axios.get('https://api.ipify.org?format=json', { timeout: 5000 })).data.ip;
-  if (!isValidIp(target)) throw new Error('Invalid IP address');
-  const response = await axios.get(`https://ipwho.is/${encodeURIComponent(target)}`, { timeout: 7000 });
-  const data = response.data;
-  if (!data?.success) throw new Error(data?.message || 'IP geolocation failed');
-  return {
-    ip: data.ip,
-    type: data.type,
-    continent: data.continent,
-    country: data.country,
-    countryCode: data.country_code,
-    region: data.region,
-    city: data.city,
-    postal: data.postal,
-    latitude: data.latitude,
-    longitude: data.longitude,
-    timezone: data.timezone?.id || null,
-    utcOffset: data.timezone?.utc || null,
-    isp: data.connection?.isp || null,
-    organization: data.connection?.org || null,
-    asn: data.connection?.asn || null,
-    domain: data.connection?.domain || null,
-    success: true,
-  };
-}
-
-function getClientIp(req) {
-  const forwarded = req.headers['x-forwarded-for'];
-  const candidate = Array.isArray(forwarded) ? forwarded[0] : String(forwarded || '').split(',')[0].trim();
-  return candidate || req.socket?.remoteAddress || 'unknown';
-}
-
-function recordLogin(username, req, success) {
-  loginHistory.unshift({
-    timestamp: new Date().toISOString(),
-    username,
-    ip: getClientIp(req),
-    success,
-    userAgent: String(req.headers['user-agent'] || 'unknown').slice(0, 300),
-  });
-  if (loginHistory.length > LOGIN_HISTORY_LIMIT) loginHistory.pop();
-}
-
 function dashboardUser(req) {
   return verifySession(parseCookies(req.headers.cookie).dashboard_session);
 }
@@ -330,38 +278,6 @@ export function startDashboard(bot, app) {
       logger.error('Dashboard control failed:', error);
       res.status(500).json({ error: error.message });
     }
-  });
-
-  app.get('/api/dashboard/geolocate', async (req, res) => {
-    if (!requireDashboardUser(req, res)) return;
-    try {
-      const ip = typeof req.query.ip === 'string' && req.query.ip.trim() ? req.query.ip.trim() : null;
-      res.json(await geolocateIp(ip));
-    } catch (error) {
-      logger.warn('Dashboard IP geolocation failed', { message: error.message });
-      res.status(400).json({ error: error.message });
-    }
-  });
-
-  app.get('/api/dashboard/login-history', (req, res) => {
-    if (!requireDashboardUser(req, res)) return;
-    res.json({
-      entries: loginHistory,
-      current: {
-        username: dashboardUser(req),
-        ip: getClientIp(req),
-      },
-    });
-  });
-
-  app.get('/api/dashboard/account', (req, res) => {
-    const username = requireDashboardUser(req, res);
-    if (!username) return;
-    res.json({
-      username,
-      currentIp: getClientIp(req),
-      sessionExpiresInSeconds: Math.max(0, Math.floor(SESSION_TTL_MS / 1000)),
-    });
   });
 
   app.get('/api/dashboard/config', (req, res) => {
