@@ -17,6 +17,7 @@ import { initializeMusic } from './services/music/riffySetup.js';
 import { shutdownMusic } from './services/music/playerHandler.js';
 import pkg from '../package.json' with { type: 'json' };
 import { EXPECTED_SCHEMA_VERSION, EXPECTED_SCHEMA_LABEL } from './config/database/schemaVersion.js';
+import { renderDashboardHTML } from './utils/webDashboard.js';
 
 class TitanBot extends Client {
   constructor() {
@@ -210,6 +211,21 @@ class TitanBot extends Client {
       });
     });
 
+    app.get('/dashboard', (req, res) => {
+      const dbStatus = this.db?.getStatus?.() || { isDegraded: true, connectionType: 'none' };
+      const stats = {
+        botName: this.user?.username || pkg.name || 'TitanBot',
+        version: pkg.version,
+        guildCount: this.guilds?.cache?.size ?? 0,
+        commandCount: this.commands?.size ?? 0,
+        databaseConnected: dbStatus.connectionType !== 'none' && !dbStatus.isDegraded,
+        databaseType: dbStatus.connectionType || 'unknown',
+        uptimeSeconds: process.uptime(),
+      };
+
+      res.status(200).set('Content-Type', 'text/html').send(renderDashboardHTML(stats));
+    });
+
     const startServer = (port, attempt = 0) => {
       let hasStartedListening = false;
       const server = app.listen(port, host, () => {
@@ -218,6 +234,7 @@ class TitanBot extends Client {
         startupLog(`✅ Web Server running on ${host}:${port}`);
         startupLog(`Health endpoint: http://${host}:${port}/health`);
         startupLog(`Ready endpoint: http://${host}:${port}/ready`);
+        startupLog(`Dashboard endpoint: http://${host}:${port}/dashboard`);
       });
 
       server.on('error', (error) => {
