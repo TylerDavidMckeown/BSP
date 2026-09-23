@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BillySMP Bot Dashboard</title>
+<style>
+:root{font-family:Inter,system-ui,sans-serif;color:#eef2ff;background:#0b1020}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top,#172554 0,#0b1020 45%);min-height:100vh}.wrap{max-width:1200px;margin:auto;padding:28px}.card{background:#111827cc;border:1px solid #26334f;border-radius:18px;padding:20px;box-shadow:0 12px 40px #0004}.login{max-width:420px;margin:12vh auto}.logo{font-size:30px;font-weight:800;margin-bottom:8px}.muted{color:#94a3b8}input,button{width:100%;padding:12px;border-radius:10px;border:1px solid #334155;background:#0f172a;color:#fff;margin-top:10px}button{cursor:pointer;background:#2563eb;border-color:#2563eb;font-weight:700}.hidden{display:none}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:18px 0}.stat strong{display:block;font-size:30px;margin-top:6px}.layout{display:grid;grid-template-columns:2fr 1fr;gap:18px}.servers{display:grid;gap:10px}.server{display:flex;align-items:center;gap:12px;background:#0f172acc;border:1px solid #26334f;padding:12px;border-radius:12px}.server img{width:42px;height:42px;border-radius:50%}.server strong{display:block}.pill{padding:5px 9px;border-radius:99px;background:#064e3b;color:#a7f3d0;font-size:12px}.top{display:flex;justify-content:space-between;align-items:center;gap:15px}.logout{width:auto;padding:8px 12px;margin:0;background:#1e293b;border-color:#334155}.error{color:#fca5a5;margin-top:10px}.meta{font-size:13px;color:#94a3b8}@media(max-width:800px){.grid{grid-template-columns:repeat(2,1fr)}.layout{grid-template-columns:1fr}}@media(max-width:480px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div id="login" class="wrap login card">
+  <div class="logo">BillySMP Dashboard</div>
+  <div class="muted">Sign in to view live bot statistics.</div>
+  <form id="loginForm">
+    <input id="username" autocomplete="username" placeholder="Username" required>
+    <input id="password" type="password" autocomplete="current-password" placeholder="Password" required>
+    <button>Sign in</button>
+    <div id="loginError" class="error"></div>
+  </form>
+</div>
+
+<main id="dashboard" class="wrap hidden">
+  <div class="top">
+    <div><div class="logo">BillySMP Dashboard</div><div class="muted">Live Discord bot telemetry</div></div>
+    <div><span id="user" class="pill"></span> <button id="logout" class="logout">Log out</button></div>
+  </div>
+
+  <section class="grid">
+    <div class="card stat"><span class="muted">Servers</span><strong id="guilds">—</strong></div>
+    <div class="card stat"><span class="muted">Members</span><strong id="members">—</strong></div>
+    <div class="card stat"><span class="muted">Channels</span><strong id="channels">—</strong></div>
+    <div class="card stat"><span class="muted">Voice users</span><strong id="voice">—</strong></div>
+    <div class="card stat"><span class="muted">Uptime</span><strong id="uptime">—</strong></div>
+    <div class="card stat"><span class="muted">Memory</span><strong id="memory">—</strong></div>
+    <div class="card stat"><span class="muted">WebSocket ping</span><strong id="ping">—</strong></div>
+    <div class="card stat"><span class="muted">Commands loaded</span><strong id="commands">—</strong></div>
+  </section>
+
+  <div class="layout">
+    <section class="card"><h2>Servers</h2><div id="servers" class="servers"></div></section>
+    <section class="card"><h2>Bot status</h2><div id="status"></div><p class="meta">Stats refresh automatically every 5 seconds.</p></section>
+  </div>
+</main>
+
+<script>
+const $=id=>document.getElementById(id);
+const fmt=n=>Number(n??0).toLocaleString();
+const uptime=s=>{s=Math.floor(s||0);const d=Math.floor(s/86400);s%=86400;const h=Math.floor(s/3600);s%=3600;const m=Math.floor(s/60);const sec=s%60;return d?d+'d '+h+'h':h?h+'h '+m+'m':m?m+'m '+sec+'s':sec+'s'};
+async function api(url,opt){const r=await fetch(url,opt);if(!r.ok)throw new Error(r.status);return r.json()}
+async function load(){try{const d=await api('/api/dashboard/stats');$('guilds').textContent=fmt(d.guilds);$('members').textContent=fmt(d.members);$('channels').textContent=fmt(d.channels);$('voice').textContent=fmt(d.usersInVoice);$('uptime').textContent=uptime(d.uptimeSeconds);$('memory').textContent=d.memoryMb+' MB';$('ping').textContent=d.websocketPing==null?'—':d.websocketPing+' ms';$('commands').textContent=fmt(d.bot.commandCount);$('status').innerHTML='<p><span class="pill">'+d.bot.status+'</span></p><p><b>'+d.bot.username+'</b></p><p class="meta">Database: '+(d.database.connectionType||'unknown')+(d.database.isDegraded?' (degraded)':'')+'</p><p class="meta">Last update: '+new Date(d.timestamp).toLocaleTimeString()+'</p>';$('servers').innerHTML=d.servers.map(s=>'<div class="server">'+(s.icon?'<img src="'+s.icon+'">':'')+'<div><strong>'+escapeHtml(s.name)+'</strong><span class="meta">'+fmt(s.members)+' members · '+fmt(s.channels)+' channels · '+fmt(s.usersInVoice)+' in voice</span></div></div>').join('')||'<span class="muted">No servers connected.</span>'}catch(e){if(e.message==='401')showLogin()}}
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]))}
+function showLogin(){ $('login').classList.remove('hidden');$('dashboard').classList.add('hidden') }
+async function init(){try{const m=await api('/api/dashboard/me');$('user').textContent=m.username;$('login').classList.add('hidden');$('dashboard').classList.remove('hidden');load();setInterval(load,5000)}catch{showLogin()}}
+$('loginForm').addEventListener('submit',async e=>{e.preventDefault();$('loginError').textContent='';try{const r=await api('/api/dashboard/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('username').value,password:$('password').value})});$('user').textContent=r.username;$('login').classList.add('hidden');$('dashboard').classList.remove('hidden');load()}catch{$('loginError').textContent='Invalid username or password.'}});
+$('logout').addEventListener('click',async()=>{await api('/api/dashboard/logout',{method:'POST'});showLogin()});init();
+</script>
+</body>
+</html>
