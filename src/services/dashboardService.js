@@ -179,6 +179,23 @@ function getStats(bot) {
   };
 }
 
+function getClientIp(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  const candidate = Array.isArray(forwarded) ? forwarded[0] : String(forwarded || '').split(',')[0].trim();
+  return candidate || req.socket?.remoteAddress || 'unknown';
+}
+
+function recordLogin(username, req, success) {
+  loginHistory.unshift({
+    timestamp: new Date().toISOString(),
+    username,
+    ip: getClientIp(req),
+    success,
+    userAgent: String(req.headers['user-agent'] || 'unknown').slice(0, 300),
+  });
+  if (loginHistory.length > LOGIN_HISTORY_LIMIT) loginHistory.pop();
+}
+
 function dashboardUser(req) {
   return verifySession(parseCookies(req.headers.cookie).dashboard_session);
 }
